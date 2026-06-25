@@ -1,38 +1,60 @@
-# ==========================================
-# STAGE 1: Builder
-# ==========================================
+# ============================================================
+# Multi-stage Dockerfile — targets < 500 MB final image
+# Stage 1 (builder): install Python deps into a venv
+# Stage 2 (runtime): copy only the venv + app code; no build tools
+# ============================================================
+
+# ── Stage 1: builder ────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
-WORKDIR /app
+# System deps needed only at build time
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Create an isolated venv so we can copy it cleanly into stage 2
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies to a local folder to easily copy them later
-RUN pip install --user --no-cache-dir -r requirements.txt
 
-# ==========================================
-# STAGE 2: Runner
-# ==========================================
-FROM python:3.12-slim
+# ── Stage 2: runtime ────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+# Supervisord runs both uvicorn (FastAPI :8000) and streamlit (:8501)
+# from the same container — matches the Week 5 architecture diagram.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the pre-built venv from stage 1
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Install supervisor (very lightweight) and clean up apt cache to save space
-RUN apt-get update && \
-    apt-get install -y supervisor && \
-    rm -rf /var/lib/apt/lists/*
+# Copy application code
+COPY core/       ./core/
+COPY api.py      .
+COPY app.py      .
 
-# Copy installed dependencies from the builder stage
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
-
-# Copy your application code
-COPY . .
-
-# Copy the supervisor config to the system directory
+# Supervisor config — starts both servers; restarts either if it crashes
+RUN mkdir -p /var/log/supervisor
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Expose ports (Render will override the external port, but good for local testing)
-EXPOSE 7860 8000
+# Persist ChromaDB and MLFlow DB across container restarts
+VOLUME ["/app/chroma_db", "/app/mlflow.db"]
 
-# Start supervisor, which will start both FastAPI and Streamlit
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+EXPOSE 8000 8501
+
+# Health check against the FastAPI /health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

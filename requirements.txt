@@ -15,6 +15,8 @@ langchain-core>=0.1.33
 langchain-community>=0.0.29
 langchain-chroma>=0.1.0
 langchain-ollama>=0.1.0
+langchain-experimental>=0.4.0
+transformers>=4.38.0
 
 # ==========================================
 # Document Processing & Vector DB (Week 3)

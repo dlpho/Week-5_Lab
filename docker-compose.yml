@@ -1,0 +1,51 @@
+version: "3.9"
+
+# ── Local development compose ──────────────────────────────────────────────
+#
+# Single service: the combined FastAPI + Streamlit image.
+# Ollama runs on the HOST machine (not in Docker) so the GPU is accessible.
+# The OLLAMA_HOST env var points the LangChain Ollama clients at the host.
+#
+# Usage:
+#   docker compose up --build
+#
+# Then visit:
+#   Streamlit  →  http://localhost:8501
+#   FastAPI    →  http://localhost:8000/docs
+#   MLFlow UI  →  mlflow ui --backend-store-uri sqlite:///mlflow.db
+# ──────────────────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: school-handbook-bot
+    ports:
+      - "8000:8000"    # FastAPI
+      - "8501:8501"    # Streamlit
+    volumes:
+      # Persist the vector store and MLFlow traces across restarts
+      - chroma_data:/app/chroma_db
+      - mlflow_data:/app/mlflow.db
+    environment:
+      # Points the Streamlit app at the FastAPI backend inside the same container
+      - BACKEND_URL=http://localhost:8000
+      # Points LangChain's Ollama client at the host machine
+      # On Linux use host-gateway; on Mac/Windows Docker resolves host.docker.internal
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux support
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  chroma_data:
+  mlflow_data:
