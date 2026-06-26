@@ -336,10 +336,10 @@ def generate_chat_stream(query: str):
             )
 
         except ValueError as exc:
-            yield f"🚨 {exc}"
+            yield f"{exc}"
         except Exception as exc:
             logger.exception("Unexpected error in generate_chat_stream")
-            yield f"🚨 An unexpected error occurred: {exc}"
+            yield f"An unexpected error occurred: {exc}"
 # --------------------------------------------------------------------------
 # PDF ingestion
 # --------------------------------------------------------------------------

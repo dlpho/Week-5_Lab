@@ -21,14 +21,6 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
 
-# --------------------------------------------------------------------------
-# MLFlow bootstrap — called once at import time.
-# Using a local SQLite file means no server is required during development;
-# swap the URI for a real tracking server in production.
-# --------------------------------------------------------------------------
-# In Docker the working directory is /app and the mlflow_data directory
-# is a named volume — use an env var so the path works both locally
-# (sqlite:///mlflow.db in cwd) and inside the container.
 import os as _os
 _mlflow_uri = _os.environ.get(
     "MLFLOW_TRACKING_URI",
@@ -59,9 +51,6 @@ class OpsCallbackHandler(BaseCallbackHandler):
     def on_llm_start(self, serialized, prompts, **kwargs):
         self._start_time = time.time()
         try:
-            # start_span requires an active MLFlow run.
-            # We use get_current_active_span() to avoid nesting conflicts;
-            # if no run is active we start a short-lived one.
             if mlflow.active_run() is None:
                 mlflow.start_run(run_name="llm_call", nested=True)
             self._span = mlflow.start_span(name="llm_inference", span_type="LLM")
@@ -86,8 +75,7 @@ class OpsCallbackHandler(BaseCallbackHandler):
 
         total_tokens = prompt_tokens + completion_tokens
 
-        # Ollama is local/free; cost is 0.  Swap in real pricing if you
-        # swap the model to a paid API (e.g. $0.002/1k tokens for gpt-3.5).
+        # Ollama is local/free; cost is 0.
         estimated_cost_usd = 0.0
 
         log_record = {

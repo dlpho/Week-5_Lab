@@ -213,17 +213,17 @@ if prompt := st.chat_input("Ask a question about school policies..."):
             except requests.exceptions.ConnectionError:
                 loading_slot.empty()
                 yield (
-                    "🚨 **Cannot reach the backend.** "
+                    "**Cannot reach the backend.** "
                     f"Ensure the backend is running at `{BACKEND_URL}`."
                 )
             except requests.exceptions.Timeout:
                 loading_slot.empty()
-                yield "🚨 **Request timed out.** The model may be overloaded — try again."
+                yield "**Request timed out.** The model may be overloaded — try again."
             except requests.exceptions.ChunkedEncodingError:
                 loading_slot.empty()
             except Exception as exc:
                 loading_slot.empty()
-                yield f"🚨 Unexpected error: {exc}"
+                yield f"Unexpected error: {exc}"
 
         full_response = st.write_stream(stream_from_api())
 

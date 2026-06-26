@@ -6,13 +6,11 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_HOST=http://host.docker.internal:11434
-      # ADD THIS: Tells llmops.py where to save the database
       - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlflow.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - chroma_data:/app/chroma_db
-      # ADD THIS: Persists the MLFlow database
       - mlflow_data:/app/mlflow_data
 
   frontend:
