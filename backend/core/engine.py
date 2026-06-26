@@ -12,6 +12,9 @@ import os
 import re
 import json
 import logging
+import time
+import mlflow
+from core.llmops import log_json_to_terminal
 
 from langchain_community.llms import Ollama
 from langchain_chroma import Chroma
@@ -22,8 +25,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_experimental.text_splitter import SemanticChunker
 
-from core.llmops import OpsCallbackHandler, RequestTrace
-
+from core.llmops import log_json_to_terminal
 logger = logging.getLogger("engine")
 
 LLM_MODEL   = "gemma3:1b"
@@ -40,8 +42,7 @@ embeddings = OllamaEmbeddings(
 llm_main = Ollama(
     model=LLM_MODEL,
     temperature=0.5,
-    base_url=OLLAMA_URL,
-    callbacks=[OpsCallbackHandler()],
+    base_url=OLLAMA_URL
 )
 
 llm_classifier = Ollama(
@@ -305,41 +306,56 @@ _chain = _PROMPT | llm_main | StrOutputParser()
 # Public streaming generator (called by both app.py and api.py)
 # --------------------------------------------------------------------------
 def generate_chat_stream(query: str):
-    with RequestTrace("chat_request") as trace:
-        try:
-            clean_query = input_guard(query)
-            retrieved_context = "No handbook has been uploaded yet."
-            if db is not None:
-                with trace.child("rag_retrieval", "RETRIEVER") as rag_span:
-                    results = db.similarity_search(clean_query, k=3)
-                    retrieved_context = "\n\n".join(d.page_content for d in results)
-                    try:
+    # 1. START THE RUN & PARENT SPAN
+    with mlflow.start_run(run_name="chat_request"):
+        with mlflow.start_span(name="chat_request", span_type="CHAIN") as chat_span:
+            try:
+                clean_query = input_guard(query)
+                retrieved_context = "No handbook has been uploaded yet."
+                
+                if db is not None:
+                    # 2. NESTED RETRIEVAL SPAN
+                    with mlflow.start_span(name="rag_retrieval", span_type="RETRIEVER") as rag_span:
+                        results = db.similarity_search(clean_query, k=3)
+                        retrieved_context = "\n\n".join(d.page_content for d in results)
                         rag_span.set_attribute("query", clean_query)
                         rag_span.set_attribute("num_results", len(results))
-                    except Exception:
-                        pass
 
-            history = memory.load_memory_variables({})["history"]
-            full_response = ""
-            for chunk in _chain.stream({
-                "context":  retrieved_context,
-                "history":  history,
-                "question": clean_query,
-            }):
-                full_response += chunk
-                yield chunk
+                history = memory.load_memory_variables({})["history"]
+                full_response = ""
+                
+                # 3. NESTED LLM SPAN
+                with mlflow.start_span(name="llm_inference", span_type="LLM") as llm_span:
+                    start_time = time.time()
+                    
+                    # Stream the response
+                    for chunk in _chain.stream({
+                        "context":  retrieved_context,
+                        "history":  history,
+                        "question": clean_query,
+                    }):
+                        full_response += chunk
+                        yield chunk
 
-            safe_response = output_guard(full_response)
-            memory.save_context(
-                {"input": clean_query},
-                {"output": safe_response},
-            )
+                    # Log latency and print JSON to terminal
+                    latency = round((time.time() - start_time) * 1000, 2)
+                    log_data = log_json_to_terminal(latency)
+                    llm_span.set_attributes(log_data)
 
-        except ValueError as exc:
-            yield f"{exc}"
-        except Exception as exc:
-            logger.exception("Unexpected error in generate_chat_stream")
-            yield f"An unexpected error occurred: {exc}"
+                # Save memory and guard output after all spans are done
+                safe_response = output_guard(full_response)
+                memory.save_context(
+                    {"input": clean_query},
+                    {"output": safe_response},
+                )
+
+            except ValueError as exc:
+                chat_span.set_attribute("error", str(exc))
+                yield f"{exc}"
+            except Exception as exc:
+                logger.exception("Unexpected error in generate_chat_stream")
+                chat_span.set_attribute("error", str(exc))
+                yield f"An unexpected error occurred: {exc}"
 # --------------------------------------------------------------------------
 # PDF ingestion
 # --------------------------------------------------------------------------
