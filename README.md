@@ -30,7 +30,7 @@ docker compose up --build
 ### LLMOps & Tracing (Week 5 Requirement)
 This project logs JSON latency/token metrics to the backend console and captures full trace trees in MLFlow. To view the traces, open a new terminal in the project root and run:
 ```bash
-mlflow ui --backend-store-uri sqlite:///mlflow.db
+mlflow ui --backend-store-uri sqlite:///mlflow_data/mlflow_traces.db
 
 Then navigate to http://localhost:5000 to inspect the rag_retrieval and llm_inference spans.
 

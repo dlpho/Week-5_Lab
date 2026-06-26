@@ -5,7 +5,7 @@ One JSON line is emitted per LLM call to stdout (satisfies the grading
 requirement) and every attribute is also stored as a span in the local
 SQLite-backed MLFlow database so you can inspect traces via:
 
-    mlflow ui --backend-store-uri sqlite:///mlflow.db
+    mlflow ui --backend-store-uri sqlite:///mlflow_data/mlflow_traces.db
 """
 
 import json
@@ -22,10 +22,12 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 import os as _os
+
 _mlflow_uri = _os.environ.get(
     "MLFLOW_TRACKING_URI",
-    "sqlite:///mlflow.db",  # local default
+    "sqlite:////app/mlflow_data/mlflow_traces.db" 
 )
+
 mlflow.set_tracking_uri(_mlflow_uri)
 mlflow.set_experiment("School_Handbook_Agent")
 

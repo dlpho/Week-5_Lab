@@ -6,12 +6,12 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_HOST=http://host.docker.internal:11434
-      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlflow.db
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlflow_traces.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - chroma_data:/app/chroma_db
-      - mlflow_data:/app/mlflow_data
+      - ./mlflow_data:/app/mlflow_data
 
   frontend:
     build: ./frontend
@@ -25,4 +25,3 @@ services:
 
 volumes:
   chroma_data:
-  mlflow_data: 
