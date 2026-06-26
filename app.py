@@ -65,7 +65,7 @@ st.markdown("""
 # Handbook initialisation — once per session, delegated entirely to engine
 # --------------------------------------------------------------------------
 if "handbook_status" not in st.session_state:
-    with st.spinner("Loading student handbook…"):
+    with st.spinner("Loading school handbook…"):
         st.session_state.handbook_status = initialize_handbook()
 
 status = st.session_state.handbook_status
@@ -74,14 +74,12 @@ status = st.session_state.handbook_status
 # Sidebar — status badge + ground-truth quick reference
 # --------------------------------------------------------------------------
 with st.sidebar:
-    st.title("📚 Quick Reference")
+    st.title("📚 Reference")
     st.caption("Ground-truth excerpts from the student handbook.")
-
     if status["ok"]:
         chunks = status.get("chunks", "?")
         path   = status.get("path", "")
-        label  = "cached index" if path == "cached" else f"{chunks} chunks indexed"
-        st.success(f"✅ Handbook ready — {label}")
+        st.success(f"✅ Handbook loaded successfully")
     else:
         st.error(
             f"❌ Handbook not loaded\n\n"
@@ -89,73 +87,67 @@ with st.sidebar:
             "**Looked in:**\n"
             + "\n".join(f"- `{p}`" for p in status.get("searched", []))
         )
-
     st.divider()
-
     with st.expander("🏫 Governance & Values", expanded=False):
         st.markdown("""
 **Mission**  
-To develop principled, capable, and globally competitive learners.
+Oakridge Academy is dedicated to fostering intellectual curiosity, critical thinking, and moral
+integrity. We prepare diverse student populations to become responsible global citizens and lifelong
+learners through rigorous academics, comprehensive arts programs, and competitive athletics.
 
 **Vision**  
-A school community committed to excellence, integrity, and service.
+Our vision is to be a benchmark institution where tradition meets innovation, cultivating leaders
+who approach the world with empathy, resilience, and outstanding scholarly capability.
 
 **Core Values**  
-Excellence · Integrity · Respect · Responsibility · Service
+Academic Excellence · Integrity · Respect · Stewardship
         """)
-
-    with st.expander("📊 Grading Framework", expanded=False):
+    with st.expander("📊 Grading Framework & GPA Scale", expanded=False):
         st.markdown("""
-| Grade | Range |
-|-------|-------|
-| A     | 93 – 100 |
-| B     | 85 – 92  |
-| C     | 78 – 84  |
-| D     | 70 – 77  |
-| F     | Below 70 |
+| Grade | Range     | GPA Equivalent | Academic Standing  |
+|-------|-----------|----------------|--------------------|
+| A     | 93 – 100  | 4.00           | Excellent          |
+| B     | 85 – 92   | 3.00           | Above Average      |
+| C     | 75 – 84   | 2.00           | Satisfactory       |
+| D     | 65 – 74   | 1.00           | Passing / At Risk  |
+| F     | Below 65  | 0.00           | Failing            |
 
-Minimum passing grade: **70%**  
-Academic probation triggered below **75% average**.
+Minimum passing grade: **65%**  
+Academic probation triggered below **2.00** GPA.
         """)
-
     with st.expander("📋 Key Policies", expanded=False):
         st.markdown("""
-- **Attendance**: max 3 absences per subject per term
-- **Tardiness**: 3 lates = 1 absence
-- **Academic Probation**: < 75% cumulative average
-- **Appeals**: within 5 school days of grade release
-- **Tutoring**: Mon–Fri, 3:00–5:00 PM at the Learning Hub
+- **Attendance**: max **10 unexcused absences** per semester — exceeding this automatically voids academic credits for that term regardless of current grade
+- **Academic Integrity**: plagiarism or unauthorized AI use → zero on assessment (first offence); repeat offences → formal suspension hearing before the Honor Council
+- **The Oakridge Pledge**: "As a member of the Oakridge Academy community, I pledge to live
+honorably, to refrain from lying, cheating, or stealing, and to actively defend the physical,
+digital, and intellectual spaces of my school from disrespect and harm."
         """)
-
     with st.expander("🎽 Uniform Policy", expanded=False):
         st.markdown("""
 **Monday – Thursday**  
-White polo shirt (school logo), khaki slacks/skirt, black shoes.
+Navy blue blazer (official school crest), tailored khaki trousers or institutional plaid pleated skirt, solid white collared dress shirt, dark leather dress shoes.
 
-**Friday**  
-PE uniform or house colour shirt (as scheduled).
-
-**Violations**  
-1st offence: verbal warning.  
-2nd offence: written notice to parent/guardian.
+**Friday (Spirit Days)**  
+Approved Oakridge polo shirt paired with neat denim jeans (no distressing, holes, or visible frayed patches).
         """)
-
     with st.expander("📜 Code of Conduct", expanded=False):
         st.markdown("""
 - Uphold the **Oakridge Pledge** at all times
-- No mobile phones during class without teacher permission
-- Bullying → immediate suspension
-- Academic dishonesty → zero on assessment + probation
+- **Electronic devices**: phones, wearables, and personal laptops must be stored away during instructional blocks unless teacher grants permission
+- **Bullying / hazing / cyber-harassment**: immediate external suspension pending expulsion assessment
+- **Vandalism**: full financial restitution + community service
+- **Academic dishonesty**: zero on assessment (1st offence); repeat offences → Honor Council suspension hearing
         """)
-
     with st.expander("🏥 Operations & Emergency", expanded=False):
         st.markdown("""
-- **Clinic hours**: 7:00 AM – 5:00 PM
-- **Emergency drill**: last Friday of every month
-- **Evacuation routes**: posted on every classroom door
-- **Contact**: registrar@school.edu · +63 2 8XXX XXXX
+- **Health suite**: continuously staffed by a registered nurse
+- **Prescription drugs & OTC medication**: stored in the locked Health Suite (documentation required)
+- **Emergency inhalers / Epi-Pens**: student self-carry authorized with dual doctor & parent waiver
+- **Emergency drills**: fire, severe weather, and security drills occur **monthly**
+- **Evacuation maps**: posted near the entry threshold of every room
         """)
-
+        
     st.divider()
     if st.button("🗑️ Clear chat history", use_container_width=True):
         st.session_state.messages = []

@@ -1,18 +1,24 @@
-version: "3.9"
-
-# ── Local development compose ──────────────────────────────────────────────
+# ── Local Docker deploy ────────────────────────────────────────────────────
 #
-# Single service: the combined FastAPI + Streamlit image.
-# Ollama runs on the HOST machine (not in Docker) so the GPU is accessible.
-# The OLLAMA_HOST env var points the LangChain Ollama clients at the host.
+# Ollama runs on your HOST machine (not inside Docker) so the LLM can access
+# your GPU / CPU resources.  The container reaches it via host.docker.internal
+# which Docker Desktop resolves automatically on Windows and Mac.
 #
-# Usage:
+# Usage (from the project root):
 #   docker compose up --build
 #
-# Then visit:
-#   Streamlit  →  http://localhost:8501
-#   FastAPI    →  http://localhost:8000/docs
-#   MLFlow UI  →  mlflow ui --backend-store-uri sqlite:///mlflow.db
+# Then open:
+#   Streamlit chat UI  →  http://localhost:8501
+#   FastAPI docs       →  http://localhost:8000/docs
+#
+# To view logs:
+#   docker compose logs -f
+#
+# To stop and remove containers (keeps volumes):
+#   docker compose down
+#
+# To also wipe the ChromaDB index and MLFlow data:
+#   docker compose down -v
 # ──────────────────────────────────────────────────────────────────────────
 
 services:
@@ -23,28 +29,31 @@ services:
       target: runtime
     container_name: school-handbook-bot
     ports:
-      - "8000:8000"    # FastAPI
-      - "8501:8501"    # Streamlit
-    volumes:
-      # Persist the vector store and MLFlow traces across restarts
-      - chroma_data:/app/chroma_db
-      - mlflow_data:/app/mlflow.db
+      - "8000:8000"    # FastAPI  → http://localhost:8000
+      - "8501:8501"    # Streamlit → http://localhost:8501
     environment:
-      # Points the Streamlit app at the FastAPI backend inside the same container
-      - BACKEND_URL=http://localhost:8000
-      # Points LangChain's Ollama client at the host machine
-      # On Linux use host-gateway; on Mac/Windows Docker resolves host.docker.internal
+      # Streamlit → FastAPI (both inside the same container)
+      - BACKEND_URL=http://host.docker.internal:8000
+      # LangChain Ollama client → Ollama on your host machine
+      # Docker Desktop (Windows/Mac) resolves this automatically
       - OLLAMA_HOST=http://host.docker.internal:11434
+      # MLFlow writes traces into the named volume
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlflow.db
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # Linux support
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Named volumes persist the index and traces across `docker compose down`
+      # but are NOT baked into the image — first run re-ingests the handbook
+      - chroma_data:/app/chroma_db
+      - mlflow_data:/app/mlflow_data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+             "import urllib.request; urllib.request.urlopen('http://host.docker.internal:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
 
 volumes:
   chroma_data:

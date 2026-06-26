@@ -1,10 +1,10 @@
 """
 RAG + Memory + Guardrails engine.
 
-Week 3 patterns: SemanticChunker, ChromaDB, similarity search
-Week 4 patterns: ConversationSummaryBufferMemory, PII redaction,
+Week 3 : SemanticChunker, ChromaDB, similarity search
+Week 4 : ConversationSummaryBufferMemory, PII redaction,
                  keyword blocking, topic classification
-Week 5 addition: RequestTrace wrapping each request so MLFlow shows
+Week 5 : RequestTrace wrapping each request so MLFlow shows
                  rag_retrieval → llm_inference in the trace tree
 """
 
@@ -25,29 +25,20 @@ from core.llmops import OpsCallbackHandler, RequestTrace
 
 logger = logging.getLogger("engine")
 
-# --------------------------------------------------------------------------
-# Constants
-# --------------------------------------------------------------------------
 LLM_MODEL   = "gemma3:1b"
 EMBED_MODEL = "nomic-embed-text"
 CHROMA_DIR  = "./chroma_db"
 
-# --------------------------------------------------------------------------
-# Singletons — initialised once at import time
-# --------------------------------------------------------------------------
 embeddings = OllamaEmbeddings(model=EMBED_MODEL)
 
-# Main LLM — carries the OpsCallbackHandler so every generation is logged
 llm_main = Ollama(
     model=LLM_MODEL,
     temperature=0.5,
     callbacks=[OpsCallbackHandler()],
 )
 
-# Classifier LLM — no callback so topic checks don't pollute the trace
 llm_classifier = Ollama(model=LLM_MODEL, temperature=0.0)
 
-# ChromaDB — gracefully absent until a PDF is ingested
 try:
     db = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
 except Exception as exc:
@@ -63,24 +54,22 @@ memory = ConversationSummaryBufferMemory(
     ai_prefix="assistant",
 )
 
-# additional guardrails
-
 # --------------------------------------------------------------------------
-# Guardrails — input and output
+# Guardrails - input and output
 #
 # Layer order (input):
-#   1. Length cap              — reject absurdly long inputs before any LLM work
-#   2. Unicode normalisation   — collapse homoglyphs so "bуpass" == "bypass"
-#   3. Repetition / flooding   — block copy-paste flooding attacks
-#   4. Keyword block list      — fast exact-match on known jailbreak phrases
-#   5. PII redaction           — scrub personal data before it hits the LLM
-#   6. Topic classifier        — LLM-based relevance gate with confidence floor
+#   1. Length cap              - additional; reject long inputs before processig
+#   2. Unicode normalisation   - additional; remove homoglyphs
+#   3. Repetition / flooding   - additional; reject repeated msgs
+#   4. Keyword block list      - keywords to block
+#   5. PII redaction           - redact PII before feeding to llm
+#   6. Topic classifier        - llm-based classifier to reject off-topic questions
 #
 # Layer order (output):
-#   1. Response length cap     — truncate runaway responses
-#   2. Hallucination guard     — refuse to answer when context is empty/weak
-#   3. PII redaction           — scrub any PII the LLM might have echoed back
-#   4. Keyword block list      — catch any jailbreak content in the response
+#   1. Response length cap     - truncate runaway responses
+#   2. Hallucination guard     - refuse to answer when context is empty/weak
+#   3. PII redaction           - scrub any PII the LLM might have echoed back
+#   4. Keyword block list      - catch any jailbreak content in the response
 # --------------------------------------------------------------------------
  
 import unicodedata as _ud
@@ -143,7 +132,7 @@ def _check_flooding(text: str) -> None:
             "Please rephrase your question."
         )
     _recent_messages.append(norm)
-    # Keep the window small — only track the last 20 messages
+    # Keep the window small - only track the last 20 messages
     if len(_recent_messages) > 20:
         _recent_messages.pop(0)
 
@@ -154,32 +143,32 @@ def _check_flooding(text: str) -> None:
 
 def redact_pii(text: str) -> str:
     """Replace common Philippine PII patterns with [REDACTED]."""
-    # PH mobile numbers  (+63 9XX or 09XX)
+    # phone numbers
     text = re.sub(
         r'\b(?:\+63[-\s]?|0)9\d{2}[-.\ s]?\d{3,4}[-.\ s]?\d{4}\b',
         '[REDACTED]', text,
     )
-    # Email addresses
+    # emails
     text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED]', text)
-    # Age mentions
+    # age
     text = re.sub(r'\b\d{1,3}[ \-]years?[ \-]old\b', '[REDACTED]', text, flags=re.IGNORECASE)
-    # Street addresses
+    # addresses
     text = re.sub(
         r'\b\d+\s+[A-Za-z][A-Za-z ]+?(?:St(?:reet)?|Ave(?:nue)?|Blvd|Road|Rd|Drive|Dr|Lane|Ln)\.?\b',
         '[REDACTED]', text, flags=re.IGNORECASE,
     )
-    # "My name is / I am / I'm <Firstname Lastname>"
+    # names (based on week 4)
     text = re.sub(
         r'(My name is|my name is|I am|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
         r'\1 [REDACTED]', text,
     )
-    # National ID
+    # national id
     text = re.sub(r'\d{4}-\d{7}-\d{1}', '[REDACTED]', text)
     return text
 
 
 BLOCK_KW = [
-    # Jailbreak / instruction override
+    # jailbreak / instruction override
     'bypass', 'override rules', 'override your', 'override instructions',
     'disregard', 'ignore previous', 'ignore your', 'ignore all', 'ignore instructions',
     'unrestricted ai', 'you have no restrictions', 'do anything now', 'dan mode',
@@ -188,14 +177,13 @@ BLOCK_KW = [
     'skip the rules', 'your new instructions', 'new persona', 'jailbreak',
     'developer mode', 'sudo mode', 'god mode', 'no filter', 'disable filter',
     'ignore safety', 'ignore restrictions', 'without restrictions',
-    # Homework / essay mill
+    # do essay
     'do my homework', 'write my essay', 'write my assignment', 'do my assignment',
     'complete my homework',
-    # Medical / legal overreach
+    # illegal
     'diagnose', 'do i have', 'prescribe', 'treatment for', 'cure',
     'legal advice', 'is this legal',
 ]
-
 
 def is_blocked_request(text: str) -> tuple[bool, str]:
     lower = text.lower()
@@ -204,15 +192,14 @@ def is_blocked_request(text: str) -> tuple[bool, str]:
             return True, kw
     return False, ''
 
-
 SCHOOL_TOPICS: dict[str, str] = {
     "GOVERNANCE":      "School mission, vision, core values.",
     "GRADES":          "Grading framework, letter grades, percentage ranges.",
-    "POLICIES":        "Academic probation, progress monitoring, tutoring.",
+    "POLICIES":        "Academic probation, progress monitoring.",
     "CODE_OF_CONDUCT": "Honor code, attendance rules, Oakridge Pledge.",
-    "UNIFORM":         "Daily school uniform, Monday–Thursday attire, Friday attire.",
+    "UNIFORM":         "Daily school uniform, Monday to Thursday attire, Friday attire.",
     "OPERATIONS":      "Campus health, emergency drills, facilities.",
-    "OFF_TOPIC":       "Anything unrelated to the school handbook CONTEXT/POLICIES — real-world events, entertainment, sports, recipes, generative requests etc.",
+    "OFF_TOPIC":       "Anything unrelated to the school handbook CONTEXT/POLICIES - real-world events, entertainment, sports, recipes, generative requests etc.",
 }
 
 _TOPIC_SYSTEM = (
@@ -270,7 +257,7 @@ def is_on_topic(user_message: str) -> dict:
             raise ValueError(f"Unknown topic: {result.get('topic')}")
         return result
     except (json.JSONDecodeError, ValueError):
-        # Fail open so classifier bugs don't brick the chatbot
+        # Fail open
         return {"topic": "UNKNOWN", "allowed": True, "confidence": 0.0, "fallback": True}
 
 
@@ -280,13 +267,13 @@ def input_guard(text: str) -> str:
     ValueError with a human-readable reason.
     """
     
-    # 1. Length cap (before any expensive work)
+    # 1. Length cap 
     _check_length(text)
     
     # 2. Flooding detection
     _check_flooding(text)
  
-    # 3. Keyword block (on normalised text to catch homoglyphs)
+    # 3. Keyword block on normalized text
     blocked, kw = is_blocked_request(text)
     if blocked:
         raise ValueError(
@@ -304,7 +291,7 @@ def input_guard(text: str) -> str:
     fallback    = topic_result.get("fallback", False)
  
     if fallback:
-        # Classifier returned an unparseable response — fail closed
+        # Classifier returned an unparseable response - fail closed
         raise ValueError(
             "I could not determine whether your question is about school policies. "
             "Please rephrase and try again."
@@ -316,7 +303,7 @@ def input_guard(text: str) -> str:
         )
  
     if confidence < MIN_TOPIC_CONFIDENCE:
-        # Allowed topic but classifier is uncertain — block to be safe
+        # Allowed topic but classifier is uncertain - block to be safe
         raise ValueError(
             "Your question is ambiguous. Could you rephrase it so it clearly "
             "relates to school policies?"
@@ -336,11 +323,11 @@ def output_guard(response: str, retrieved_context: str = "") -> str:
     retrieved_context : the RAG context string passed to the LLM;
                         used to detect answers generated without grounding
     """
-    # 1. Length cap — truncate runaway responses
+    # 1. Length cap - truncate runaway responses
     if len(response) > MAX_OUTPUT_CHARS:
         response = response[:MAX_OUTPUT_CHARS].rstrip() + "…"
  
-    # 2. Hallucination guard — if no context was retrieved the LLM has
+    # 2. Hallucination guard - if no context was retrieved the LLM has
     #    nothing to ground its answer on; override with a safe refusal.
     if not retrieved_context or retrieved_context.strip() == "No handbook has been uploaded yet.":
         return (
@@ -351,7 +338,7 @@ def output_guard(response: str, retrieved_context: str = "") -> str:
     # 3. PII redaction on the generated text
     response = redact_pii(response)
  
-    # 4. Keyword block — catch any jailbreak content echoed in the output
+    # 4. Keyword block - catch any jailbreak content echoed in the output
     blocked, _ = is_blocked_request(response)
     if blocked:
         return (
@@ -367,7 +354,7 @@ def output_guard(response: str, retrieved_context: str = "") -> str:
 _PROMPT = ChatPromptTemplate.from_template("""
 You are a helpful, factual AI assistant that answers school policy-related questions.
 Answer using only the retrieved context below. If the context does not contain
-the answer, say so clearly — do not make up information.
+the answer, say so clearly - do not make up information.
 Use logical reasoning to answer the question. Make sure your response sufficiently answers the question and makes sense.
 Do not make up answers or provide alternatives.
 When referring to the context, call it "the school handbook".
@@ -401,9 +388,9 @@ def generate_chat_stream(query: str):
     Wraps the full request in an MLFlow RequestTrace so the UI shows:
         chat_request
           └─ rag_retrieval   (RETRIEVER span)
-          └─ llm_inference   (LLM span — opened by OpsCallbackHandler)
+          └─ llm_inference   (LLM span - opened by OpsCallbackHandler)
 
-    Raises nothing — errors are yielded as emoji-prefixed strings so the
+    Raises nothing - errors are yielded as emoji-prefixed strings so the
     UI can display them gracefully.
     """
     with RequestTrace("chat_request") as trace:
@@ -411,7 +398,7 @@ def generate_chat_stream(query: str):
             # 1. Input guardrails
             clean_query = input_guard(query)
 
-            # 2. RAG retrieval — logged as its own child span
+            # 2. RAG retrieval - logged as its own child span
             retrieved_context = "No handbook has been uploaded yet."
             if db is not None:
                 with trace.child("rag_retrieval", "RETRIEVER") as rag_span:
@@ -455,7 +442,7 @@ def generate_chat_stream(query: str):
 # --------------------------------------------------------------------------
 def process_pdf(file_path: str) -> int:
     """
-    Load a PDF, chunk it with SemanticChunker, and upsert into ChromaDB.
+    Load school handbook PDF, chunk it with SemanticChunker, and upsert into ChromaDB.
     Returns the number of chunks ingested.
     """
     global db
@@ -486,16 +473,13 @@ def process_pdf(file_path: str) -> int:
 
 
 # --------------------------------------------------------------------------
-# Handbook initialisation — called once at app startup
+# Handbook initialisation - called once at app startup
 # --------------------------------------------------------------------------
 import os as _os
 
-# Canonical locations to search for the handbook, in priority order.
-# 1. Working directory (where `streamlit run app.py` / `uvicorn` is invoked)
-# 2. Directory containing this engine.py file
 _HANDBOOK_CANDIDATES = [
-    _os.path.join(_os.getcwd(), "student_handbook.pdf"),
-    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "student_handbook.pdf"),
+    _os.path.join(_os.getcwd(), "school_handbook.pdf"),
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "school_handbook.pdf"),
 ]
 
 
@@ -509,13 +493,13 @@ def _find_handbook() -> str | None:
 
 def initialize_handbook() -> dict:
     """
-    Locate and ingest student_handbook.pdf into ChromaDB.
+    Locate and ingest school_handbook.pdf into ChromaDB.
 
     Returns a status dict consumed by app.py:
         {"ok": True,  "path": "...", "chunks": 42}
         {"ok": False, "error": "...", "searched": [...]}
 
-    Safe to call multiple times — if ChromaDB already contains data from a
+    Safe to call multiple times - if ChromaDB already contains data from a
     previous run (persisted on disk) this is a no-op and returns immediately.
     """
     # If ChromaDB already has documents we don't need to re-ingest
@@ -523,17 +507,17 @@ def initialize_handbook() -> dict:
         try:
             count = db._collection.count()
             if count > 0:
-                logger.info(f"ChromaDB already populated ({count} docs) — skipping ingest.")
+                logger.info(f"ChromaDB already populated ({count} docs) - skipping ingest.")
                 return {"ok": True, "path": "cached", "chunks": count}
         except Exception:
-            pass  # can't count — fall through and ingest
+            pass  # can't count - fall through and ingest
 
     path = _find_handbook()
     if path is None:
         searched = [_os.path.abspath(c) for c in _HANDBOOK_CANDIDATES]
         return {
             "ok": False,
-            "error": "student_handbook.pdf not found.",
+            "error": "school_handbook.pdf not found.",
             "searched": searched,
         }
 

@@ -26,7 +26,15 @@ if not logger.handlers:
 # Using a local SQLite file means no server is required during development;
 # swap the URI for a real tracking server in production.
 # --------------------------------------------------------------------------
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+# In Docker the working directory is /app and the mlflow_data directory
+# is a named volume — use an env var so the path works both locally
+# (sqlite:///mlflow.db in cwd) and inside the container.
+import os as _os
+_mlflow_uri = _os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    "sqlite:///mlflow.db",  # local default
+)
+mlflow.set_tracking_uri(_mlflow_uri)
 mlflow.set_experiment("School_Handbook_Agent")
 
 
