@@ -3,26 +3,21 @@ Streamlit frontend — Student Handbook Chatbot
 
 app.py owns only UI concerns:
   - page config, CSS, layout
-  - session state for chat history and handbook status
-  - calling engine.initialize_handbook() once at startup
+  - checking backend health status via HTTP
   - rendering the sidebar reference panel
   - driving the chat input → SSE stream → write_stream loop
-
-All PDF path resolution, ingestion, RAG, memory, and guardrails
-live in core/engine.py.
 """
 
 import os
 import requests
 import streamlit as st
 
-from core.engine import initialize_handbook
-
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
 BACKEND_URL     = os.environ.get("BACKEND_URL", "http://localhost:8000")
 STREAM_ENDPOINT = f"{BACKEND_URL}/chat/stream"
+HEALTH_ENDPOINT = f"{BACKEND_URL}/health"
 
 # --------------------------------------------------------------------------
 # Page setup
@@ -62,13 +57,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------
-# Handbook initialisation — once per session, delegated entirely to engine
+# Backend Health Check
 # --------------------------------------------------------------------------
-if "handbook_status" not in st.session_state:
-    with st.spinner("Loading school handbook…"):
-        st.session_state.handbook_status = initialize_handbook()
+@st.cache_data(ttl=60)
+def check_backend_status():
+    """Ping the FastAPI backend to ensure it is awake and ready."""
+    try:
+        response = requests.get(HEALTH_ENDPOINT, timeout=5)
+        response.raise_for_status()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-status = st.session_state.handbook_status
+if "backend_status" not in st.session_state:
+    with st.spinner("Connecting to backend AI engine..."):
+        st.session_state.backend_status = check_backend_status()
+
+status = st.session_state.backend_status
 
 # --------------------------------------------------------------------------
 # Sidebar — status badge + ground-truth quick reference
@@ -76,31 +81,27 @@ status = st.session_state.handbook_status
 with st.sidebar:
     st.title("📚 Reference")
     st.caption("Ground-truth excerpts from the student handbook.")
+    
     if status["ok"]:
-        chunks = status.get("chunks", "?")
-        path   = status.get("path", "")
-        st.success(f"✅ Handbook loaded successfully")
+        st.success(f"✅ Backend Engine Connected")
     else:
         st.error(
-            f"❌ Handbook not loaded\n\n"
-            f"**Reason:** {status.get('error')}\n\n"
-            "**Looked in:**\n"
-            + "\n".join(f"- `{p}`" for p in status.get("searched", []))
+            f"❌ Backend Unavailable\n\n"
+            f"**Error:** {status.get('error')}\n\n"
+            f"Please ensure the backend container is running."
         )
+        
     st.divider()
     with st.expander("🏫 Governance & Values", expanded=False):
         st.markdown("""
-**Mission**  
-Oakridge Academy is dedicated to fostering intellectual curiosity, critical thinking, and moral
+**Mission** Oakridge Academy is dedicated to fostering intellectual curiosity, critical thinking, and moral
 integrity. We prepare diverse student populations to become responsible global citizens and lifelong
 learners through rigorous academics, comprehensive arts programs, and competitive athletics.
 
-**Vision**  
-Our vision is to be a benchmark institution where tradition meets innovation, cultivating leaders
+**Vision** Our vision is to be a benchmark institution where tradition meets innovation, cultivating leaders
 who approach the world with empathy, resilience, and outstanding scholarly capability.
 
-**Core Values**  
-Academic Excellence · Integrity · Respect · Stewardship
+**Core Values** Academic Excellence · Integrity · Respect · Stewardship
         """)
     with st.expander("📊 Grading Framework & GPA Scale", expanded=False):
         st.markdown("""
@@ -112,8 +113,7 @@ Academic Excellence · Integrity · Respect · Stewardship
 | D     | 65 – 74   | 1.00           | Passing / At Risk  |
 | F     | Below 65  | 0.00           | Failing            |
 
-Minimum passing grade: **65%**  
-Academic probation triggered below **2.00** GPA.
+Minimum passing grade: **65%** Academic probation triggered below **2.00** GPA.
         """)
     with st.expander("📋 Key Policies", expanded=False):
         st.markdown("""
@@ -125,11 +125,9 @@ digital, and intellectual spaces of my school from disrespect and harm."
         """)
     with st.expander("🎽 Uniform Policy", expanded=False):
         st.markdown("""
-**Monday – Thursday**  
-Navy blue blazer (official school crest), tailored khaki trousers or institutional plaid pleated skirt, solid white collared dress shirt, dark leather dress shoes.
+**Monday – Thursday** Navy blue blazer (official school crest), tailored khaki trousers or institutional plaid pleated skirt, solid white collared dress shirt, dark leather dress shoes.
 
-**Friday (Spirit Days)**  
-Approved Oakridge polo shirt paired with neat denim jeans (no distressing, holes, or visible frayed patches).
+**Friday (Spirit Days)** Approved Oakridge polo shirt paired with neat denim jeans (no distressing, holes, or visible frayed patches).
         """)
     with st.expander("📜 Code of Conduct", expanded=False):
         st.markdown("""
@@ -160,10 +158,7 @@ st.title("Student Handbook Chatbot")
 st.caption("Ask me anything about school policies, grades, uniform, attendance, and more.")
 
 if not status["ok"]:
-    st.error(
-        "The handbook could not be loaded so answers may be incomplete. "
-        "Check the sidebar for details."
-    )
+    st.warning("Cannot connect to the backend. The chatbot will not be able to answer questions.")
 
 # --------------------------------------------------------------------------
 # Chat state + history replay
@@ -178,7 +173,7 @@ for msg in st.session_state.messages:
 # --------------------------------------------------------------------------
 # Chat input + streaming response
 # --------------------------------------------------------------------------
-if prompt := st.chat_input("Ask a question about school policies…"):
+if prompt := st.chat_input("Ask a question about school policies..."):
 
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -186,7 +181,6 @@ if prompt := st.chat_input("Ask a question about school policies…"):
 
     with st.chat_message("assistant"):
 
-        # Show 3-dot animation while waiting for the first SSE chunk
         loading_slot = st.empty()
         loading_slot.markdown(
             '<div class="dot-flashing">'
@@ -219,8 +213,8 @@ if prompt := st.chat_input("Ask a question about school policies…"):
             except requests.exceptions.ConnectionError:
                 loading_slot.empty()
                 yield (
-                    "🚨 **Cannot reach the backend.**  "
-                    "Make sure `uvicorn api:app --port 8000` is running."
+                    "🚨 **Cannot reach the backend.** "
+                    f"Ensure the backend is running at `{BACKEND_URL}`."
                 )
             except requests.exceptions.Timeout:
                 loading_slot.empty()

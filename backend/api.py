@@ -9,16 +9,38 @@ the RAG + Memory + Guardrails logic lives entirely in core/engine.py.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from core.engine import generate_chat_stream
+# Corrected import for the new directory structure
+from core.engine import generate_chat_stream, initialize_handbook
 
-app = FastAPI(title="School Handbook Support API", version="1.0.0")
+# --------------------------------------------------------------------------
+# Startup & Shutdown Logic (Lifespan)
+# --------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This runs as soon as the API container starts
+    print("Initializing handbook ingestion...")
+    result = initialize_handbook()
+    
+    # Using .get() for safety in case the dict keys vary slightly
+    if result.get("ok"):
+        print(f"Success: {result.get('chunks', 'Unknown')} chunks ingested.")
+    else:
+        print(f"Error loading handbook: {result.get('error', 'Unknown error')}")
+    
+    yield  # The API handles requests while paused here
+    
+    print("Shutting down API...")
 
-# Allow requests from the Streamlit frontend (port 8501) and any origin
+# Attach the lifespan to the app
+app = FastAPI(title="School Handbook Support API", version="1.0.0", lifespan=lifespan)
+
+# Allow requests from the Streamlit frontend (port 7860 or 8501) and any origin
 # during development.  Tighten this in production.
 app.add_middleware(
     CORSMiddleware,
@@ -45,12 +67,6 @@ def health():
 
 # --------------------------------------------------------------------------
 # POST /chat/stream — SSE endpoint
-#
-# SSE format (per HTML spec):
-#   data: <payload>\n\n
-#
-# Newlines inside the payload are escaped to \\n so they don't break the
-# framing.  The Streamlit client reverses this when it renders.
 # --------------------------------------------------------------------------
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
@@ -60,7 +76,7 @@ async def chat_stream(req: ChatRequest):
     async def event_generator():
         """
         generate_chat_stream is a synchronous generator (it uses LangChain's
-        .stream() which is sync).  We run it in a thread-pool executor so we
+        .stream() which is sync). We run it in a thread-pool executor so we
         don't block the FastAPI event loop.
         """
         loop = asyncio.get_event_loop()

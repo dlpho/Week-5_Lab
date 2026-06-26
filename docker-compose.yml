@@ -1,60 +1,30 @@
-# ── Local Docker deploy ────────────────────────────────────────────────────
-#
-# Ollama runs on your HOST machine (not inside Docker) so the LLM can access
-# your GPU / CPU resources.  The container reaches it via host.docker.internal
-# which Docker Desktop resolves automatically on Windows and Mac.
-#
-# Usage (from the project root):
-#   docker compose up --build
-#
-# Then open:
-#   Streamlit chat UI  →  http://localhost:8501
-#   FastAPI docs       →  http://localhost:8000/docs
-#
-# To view logs:
-#   docker compose logs -f
-#
-# To stop and remove containers (keeps volumes):
-#   docker compose down
-#
-# To also wipe the ChromaDB index and MLFlow data:
-#   docker compose down -v
-# ──────────────────────────────────────────────────────────────────────────
-
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    container_name: school-handbook-bot
+  backend:
+    build: ./backend
+    container_name: support-bot-backend
     ports:
-      - "8000:8000"    # FastAPI  → http://localhost:8000
-      - "8501:8501"    # Streamlit → http://localhost:8501
+      - "8000:8000"
     environment:
-      # Streamlit → FastAPI (both inside the same container)
-      - BACKEND_URL=http://host.docker.internal:8000
-      # LangChain Ollama client → Ollama on your host machine
-      # Docker Desktop (Windows/Mac) resolves this automatically
       - OLLAMA_HOST=http://host.docker.internal:11434
-      # MLFlow writes traces into the named volume
+      # ADD THIS: Tells llmops.py where to save the database
       - MLFLOW_TRACKING_URI=sqlite:////app/mlflow_data/mlflow.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # Named volumes persist the index and traces across `docker compose down`
-      # but are NOT baked into the image — first run re-ingests the handbook
       - chroma_data:/app/chroma_db
+      # ADD THIS: Persists the MLFlow database
       - mlflow_data:/app/mlflow_data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://host.docker.internal:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+
+  frontend:
+    build: ./frontend
+    container_name: support-bot-frontend
+    environment:
+      - BACKEND_URL=http://backend:8000
+    ports:
+      - "7860:7860"
+    depends_on:
+      - backend
 
 volumes:
   chroma_data:
-  mlflow_data:
+  mlflow_data: 

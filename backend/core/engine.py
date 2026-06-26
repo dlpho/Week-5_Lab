@@ -8,6 +8,7 @@ Week 5 : RequestTrace wrapping each request so MLFlow shows
                  rag_retrieval → llm_inference in the trace tree
 """
 
+import os
 import re
 import json
 import logging
@@ -29,15 +30,25 @@ LLM_MODEL   = "gemma3:1b"
 EMBED_MODEL = "nomic-embed-text"
 CHROMA_DIR  = "./chroma_db"
 
-embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+OLLAMA_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+embeddings = OllamaEmbeddings(
+    model=EMBED_MODEL,
+    base_url=OLLAMA_URL
+)
 
 llm_main = Ollama(
     model=LLM_MODEL,
     temperature=0.5,
+    base_url=OLLAMA_URL,
     callbacks=[OpsCallbackHandler()],
 )
 
-llm_classifier = Ollama(model=LLM_MODEL, temperature=0.0)
+llm_classifier = Ollama(
+    model=LLM_MODEL,
+    temperature=0.0,
+    base_url=OLLAMA_URL
+)
 
 try:
     db = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
@@ -76,21 +87,10 @@ import unicodedata as _ud
  
 # ── Constants ──────────────────────────────────────────────────────────────
  
-# Maximum characters accepted in a single user message.
-# Prevents prompt-stuffing and keeps classifier latency bounded.
 MAX_INPUT_CHARS = 1_500
- 
-# Maximum characters in a generated response before truncation.
 MAX_OUTPUT_CHARS = 3_000
- 
-# LLM-classifier confidence below this threshold → fail CLOSED (block).
-# Keeps low-confidence "allowed" decisions from leaking through.
 MIN_TOPIC_CONFIDENCE = 0.55
- 
-# If the same message is repeated this many times in a session, block it.
 MAX_IDENTICAL_MESSAGES = 3
- 
-# Rolling window for flooding detection (messages in memory object)
 _recent_messages: list[str] = []
  
  
@@ -142,30 +142,13 @@ def _check_flooding(text: str) -> None:
 # --------------------------------------------------------------------------
 
 def redact_pii(text: str) -> str:
-    """Replace common Philippine PII patterns with [REDACTED]."""
-    # phone numbers
-    text = re.sub(
-        r'\b(?:\+63[-\s]?|0)9\d{2}[-.\ s]?\d{3,4}[-.\ s]?\d{4}\b',
-        '[REDACTED]', text,
-    )
-    # emails
+    text = re.sub(r'\b(?:\+63[-\s]?|0)9\d{2}[-.\ s]?\d{3,4}[-.\ s]?\d{4}\b', '[REDACTED]', text)
     text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED]', text)
-    # age
     text = re.sub(r'\b\d{1,3}[ \-]years?[ \-]old\b', '[REDACTED]', text, flags=re.IGNORECASE)
-    # addresses
-    text = re.sub(
-        r'\b\d+\s+[A-Za-z][A-Za-z ]+?(?:St(?:reet)?|Ave(?:nue)?|Blvd|Road|Rd|Drive|Dr|Lane|Ln)\.?\b',
-        '[REDACTED]', text, flags=re.IGNORECASE,
-    )
-    # names (based on week 4)
-    text = re.sub(
-        r'(My name is|my name is|I am|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
-        r'\1 [REDACTED]', text,
-    )
-    # national id
+    text = re.sub(r'\b\d+\s+[A-Za-z][A-Za-z ]+?(?:St(?:reet)?|Ave(?:nue)?|Blvd|Road|Rd|Drive|Dr|Lane|Ln)\.?\b', '[REDACTED]', text, flags=re.IGNORECASE)
+    text = re.sub(r'(My name is|my name is|I am|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', r'\1 [REDACTED]', text)
     text = re.sub(r'\d{4}-\d{7}-\d{1}', '[REDACTED]', text)
     return text
-
 
 BLOCK_KW = [
     # jailbreak / instruction override
@@ -239,7 +222,6 @@ _TOPIC_FEW_SHOT = [
     {"role": "assistant", "content": '{"topic": "OFF_TOPIC", "allowed": false, "confidence": 0.98}'},
 ]
 
-
 def is_on_topic(user_message: str) -> dict:
     messages = [
         {"role": "system", "content": _TOPIC_SYSTEM},
@@ -247,7 +229,6 @@ def is_on_topic(user_message: str) -> dict:
         {"role": "user", "content": user_message},
     ]
     response = llm_classifier.invoke(messages)
-    print(response)
     try:
         match = re.search(r'\{.*?\}', response, re.DOTALL)
         if not match:
@@ -257,95 +238,37 @@ def is_on_topic(user_message: str) -> dict:
             raise ValueError(f"Unknown topic: {result.get('topic')}")
         return result
     except (json.JSONDecodeError, ValueError):
-        # Fail open
         return {"topic": "UNKNOWN", "allowed": True, "confidence": 0.0, "fallback": True}
 
-
 def input_guard(text: str) -> str:
-    """
-    Run all input-side guardrails.  Returns the cleaned text or raises
-    ValueError with a human-readable reason.
-    """
-    
-    # 1. Length cap 
     _check_length(text)
-    
-    # 2. Flooding detection
     _check_flooding(text)
- 
-    # 3. Keyword block on normalized text
     blocked, kw = is_blocked_request(text)
     if blocked:
-        raise ValueError(
-            f"Your message contains a term that is not permitted (\'{kw}\'). "
-            "Please ask a question about school policies."
-        )
-        
-    # 4. PII redaction (before the classifier sees the text)
+        raise ValueError("Your message contains a term that is not permitted. Please ask a question about school policies.")
     clean = redact_pii(text)
-
-    # 5. Topic classification with confidence floor
     topic_result = is_on_topic(clean)
     allowed     = topic_result.get("allowed", False)
     confidence  = topic_result.get("confidence", 0.0)
     fallback    = topic_result.get("fallback", False)
  
     if fallback:
-        # Classifier returned an unparseable response - fail closed
-        raise ValueError(
-            "I could not determine whether your question is about school policies. "
-            "Please rephrase and try again."
-        )
- 
+        raise ValueError("I could not determine whether your question is about school policies. Please rephrase and try again.")
     if not allowed:
-        raise ValueError(
-            "I can only answer questions about school policies "
-        )
- 
+        raise ValueError("I can only answer questions about school policies.")
     if confidence < MIN_TOPIC_CONFIDENCE:
-        # Allowed topic but classifier is uncertain - block to be safe
-        raise ValueError(
-            "Your question is ambiguous. Could you rephrase it so it clearly "
-            "relates to school policies?"
-        )
- 
+        raise ValueError("Your question is ambiguous. Could you rephrase it so it clearly relates to school policies?")
     return clean
 
-
 def output_guard(response: str, retrieved_context: str = "") -> str:
-    """
-    Run all output-side guardrail layers in order.
-    Returns a safe, possibly truncated response string.
- 
-    Parameters
-    ----------
-    response          : raw LLM output
-    retrieved_context : the RAG context string passed to the LLM;
-                        used to detect answers generated without grounding
-    """
-    # 1. Length cap - truncate runaway responses
     if len(response) > MAX_OUTPUT_CHARS:
         response = response[:MAX_OUTPUT_CHARS].rstrip() + "…"
- 
-    # 2. Hallucination guard - if no context was retrieved the LLM has
-    #    nothing to ground its answer on; override with a safe refusal.
     if not retrieved_context or retrieved_context.strip() == "No handbook has been uploaded yet.":
-        return (
-            "I don't have enough information in the handbook to answer that question. "
-            "Please refer to school administration directly."
-        )
- 
-    # 3. PII redaction on the generated text
+        return "I don't have enough information in the handbook to answer that question. Please refer to school administration directly."
     response = redact_pii(response)
- 
-    # 4. Keyword block - catch any jailbreak content echoed in the output
     blocked, _ = is_blocked_request(response)
     if blocked:
-        return (
-            "I cannot provide that information. "
-            "Please refer to school administration directly."
-        )
- 
+        return "I cannot provide that information. Please refer to school administration directly."
     return response
 
 # --------------------------------------------------------------------------
@@ -382,23 +305,9 @@ _chain = _PROMPT | llm_main | StrOutputParser()
 # Public streaming generator (called by both app.py and api.py)
 # --------------------------------------------------------------------------
 def generate_chat_stream(query: str):
-    """
-    Generator that yields response text chunks.
-
-    Wraps the full request in an MLFlow RequestTrace so the UI shows:
-        chat_request
-          └─ rag_retrieval   (RETRIEVER span)
-          └─ llm_inference   (LLM span - opened by OpsCallbackHandler)
-
-    Raises nothing - errors are yielded as emoji-prefixed strings so the
-    UI can display them gracefully.
-    """
     with RequestTrace("chat_request") as trace:
         try:
-            # 1. Input guardrails
             clean_query = input_guard(query)
-
-            # 2. RAG retrieval - logged as its own child span
             retrieved_context = "No handbook has been uploaded yet."
             if db is not None:
                 with trace.child("rag_retrieval", "RETRIEVER") as rag_span:
@@ -410,10 +319,7 @@ def generate_chat_stream(query: str):
                     except Exception:
                         pass
 
-            # 3. Conversation memory
             history = memory.load_memory_variables({})["history"]
-
-            # 4. Streaming LLM call (OpsCallbackHandler opens llm_inference span)
             full_response = ""
             for chunk in _chain.stream({
                 "context":  retrieved_context,
@@ -423,7 +329,6 @@ def generate_chat_stream(query: str):
                 full_response += chunk
                 yield chunk
 
-            # 5. Output guardrail & memory update
             safe_response = output_guard(full_response)
             memory.save_context(
                 {"input": clean_query},
@@ -435,22 +340,13 @@ def generate_chat_stream(query: str):
         except Exception as exc:
             logger.exception("Unexpected error in generate_chat_stream")
             yield f"🚨 An unexpected error occurred: {exc}"
-
-
 # --------------------------------------------------------------------------
 # PDF ingestion
 # --------------------------------------------------------------------------
 def process_pdf(file_path: str) -> int:
-    """
-    Load school handbook PDF, chunk it with SemanticChunker, and upsert into ChromaDB.
-    Returns the number of chunks ingested.
-    """
     global db
-
-    # Week 3: PyPDFLoader + SemanticChunker
     loader = PyPDFLoader(file_path)
     docs   = loader.load()
-
     text_splitter = SemanticChunker(
         embeddings,
         breakpoint_threshold_type="percentile",
@@ -471,38 +367,24 @@ def process_pdf(file_path: str) -> int:
     logger.info(f"Ingested {len(chunks)} chunks from {file_path}")
     return len(chunks)
 
-
 # --------------------------------------------------------------------------
 # Handbook initialisation - called once at app startup
 # --------------------------------------------------------------------------
 import os as _os
 
 _HANDBOOK_CANDIDATES = [
+    "/app/school_handbook.pdf",
     _os.path.join(_os.getcwd(), "school_handbook.pdf"),
     _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "school_handbook.pdf"),
 ]
 
-
 def _find_handbook() -> str | None:
-    """Return the first existing handbook path, or None."""
     for candidate in _HANDBOOK_CANDIDATES:
         if _os.path.exists(candidate):
             return _os.path.abspath(candidate)
     return None
 
-
 def initialize_handbook() -> dict:
-    """
-    Locate and ingest school_handbook.pdf into ChromaDB.
-
-    Returns a status dict consumed by app.py:
-        {"ok": True,  "path": "...", "chunks": 42}
-        {"ok": False, "error": "...", "searched": [...]}
-
-    Safe to call multiple times - if ChromaDB already contains data from a
-    previous run (persisted on disk) this is a no-op and returns immediately.
-    """
-    # If ChromaDB already has documents we don't need to re-ingest
     if db is not None:
         try:
             count = db._collection.count()
@@ -510,7 +392,7 @@ def initialize_handbook() -> dict:
                 logger.info(f"ChromaDB already populated ({count} docs) - skipping ingest.")
                 return {"ok": True, "path": "cached", "chunks": count}
         except Exception:
-            pass  # can't count - fall through and ingest
+            pass 
 
     path = _find_handbook()
     if path is None:
